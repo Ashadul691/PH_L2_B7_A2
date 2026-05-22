@@ -1,11 +1,12 @@
 import app from "./app";
-import dotenv from "dotenv";
-import path from "path";
+import config from "./config";
+import { initDB } from "./db";
 
-dotenv.config({ path: path.join(process.cwd(), ".env") });
+const main = async () => {
+  await initDB();                 
+  app.listen(config.port, () => {
+    console.log(`DevPulse running on http://localhost:${config.port}`);
+  });
+};
 
-const PORT = process.env.PORT || 5000;
-
-app.listen(PORT, () => {
-  console.log(`DevPulse running on http://localhost:${PORT}`);
-});
+main();
