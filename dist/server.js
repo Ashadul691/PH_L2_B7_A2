@@ -43,12 +43,13 @@ import { Router } from "express";
 
 // src/utility/sendResponse.ts
 var sendResponse = (res, payload) => {
-  res.status(payload.statusCode).json({
+  const body = {
     success: payload.success,
-    message: payload.message,
-    data: payload.data,
-    errors: payload.errors
-  });
+    message: payload.message
+  };
+  if (payload.data !== void 0) body.data = payload.data;
+  if (payload.errors !== void 0) body.errors = payload.errors;
+  res.status(payload.statusCode).json(body);
 };
 var sendResponse_default = sendResponse;
 
@@ -67,7 +68,7 @@ var config = {
   port: process.env.PORT || 5e3,
   connection_string: process.env.CONNECTIONSTRING,
   secret: process.env.JWT_SECRET,
-  refresh_secret: process.env.JWT_REFRESH_SECRET
+  bcrypt_rounds: Number(process.env.BCRYPT_ROUNDS) || 10
 };
 var config_default = config;
 
@@ -114,7 +115,7 @@ var generateToken = (payload) => {
 // src/module/auth/auth.service.ts
 var registerUserIntoDB = async (payload) => {
   const { name, email, password, role } = payload;
-  const hashPassword = await bcrypt.hash(password, 10);
+  const hashPassword = await bcrypt.hash(password, config_default.bcrypt_rounds);
   const result = await pool.query(
     `INSERT INTO users (name, email, password, role)
      VALUES ($1, $2, $3, COALESCE($4, 'contributor'))
@@ -137,11 +138,6 @@ var loginUserIntoDB = async (payload) => {
   if (!passwordMatch) {
     throw new Error("Invalid credentials!");
   }
-  const jwtPayload = {
-    id: user.id,
-    name: user.name,
-    role: user.role
-  };
   const token = generateToken({ id: user.id, name: user.name, role: user.role });
   const { password: _removed, ...safeUser } = user;
   return { token, user: safeUser };
@@ -151,10 +147,38 @@ var loginUserIntoDB = async (payload) => {
 var registerUser = async (req, res, next) => {
   try {
     const data = req.body;
+    if (!data.name || !data.email || !data.password) {
+      sendResponse_default(res, {
+        statusCode: 400,
+        success: false,
+        message: "Validation error",
+        errors: "name, email, and password are required"
+      });
+      return;
+    }
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(data.email)) {
+      sendResponse_default(res, { statusCode: 400, success: false, message: "Invalid email format" });
+      return;
+    }
+    if (data.role && !["contributor", "maintainer"].includes(data.role)) {
+      sendResponse_default(res, {
+        statusCode: 400,
+        success: false,
+        message: "Invalid role \u2014 must be contributor or maintainer"
+      });
+      return;
+    }
     const result = await registerUserIntoDB(data);
-    sendResponse_default(res, { statusCode: 201, success: true, message: "User registered successfully", data: result });
+    sendResponse_default(res, {
+      statusCode: 201,
+      success: true,
+      message: "User registered successfully",
+      data: result
+    });
   } catch (error) {
-    if (error.message.includes("duplicate key")) {
+    const err = error;
+    if (err.message?.includes("duplicate key")) {
       sendResponse_default(res, { statusCode: 400, success: false, message: "Email already registered" });
     } else {
       next(error);
@@ -164,10 +188,19 @@ var registerUser = async (req, res, next) => {
 var loginUser = async (req, res, next) => {
   try {
     const data = req.body;
+    if (!data.email || !data.password) {
+      sendResponse_default(res, {
+        statusCode: 400,
+        success: false,
+        message: "email and password are required"
+      });
+      return;
+    }
     const result = await loginUserIntoDB(data);
     sendResponse_default(res, { statusCode: 200, success: true, message: "Login successful", data: result });
   } catch (error) {
-    sendResponse_default(res, { statusCode: 401, success: false, message: error.message });
+    const err = error;
+    sendResponse_default(res, { statusCode: 401, success: false, message: err.message });
   }
 };
 var authController = {
@@ -218,29 +251,26 @@ var getAllIssuesFromDB = async (filters) => {
   for (const r of reportersResult.rows) {
     reporterMap[r.id] = { id: r.id, name: r.name, role: r.role };
   }
-  return issues.map((issue) => ({
-    ...issue,
-    reporter: reporterMap[issue.reporter_id] || null,
-    reporter_id: void 0
+  return issues.map(({ reporter_id, ...rest }) => ({
+    ...rest,
+    reporter: reporterMap[reporter_id] || null
   }));
 };
 var getSingleIssueFromDB = async (id) => {
   const issueResult = await pool.query(
     `SELECT id, title, description, type, status, reporter_id, created_at, updated_at
-     FROM issues
-     WHERE id = $1`,
+     FROM issues WHERE id = $1`,
     [id]
   );
   if (!issueResult.rows[0]) return null;
-  const issue = issueResult.rows[0];
+  const { reporter_id, ...rest } = issueResult.rows[0];
   const reporterResult = await pool.query(
     `SELECT id, name, role FROM users WHERE id = $1`,
-    [issue.reporter_id]
+    [reporter_id]
   );
   return {
-    ...issue,
-    reporter: reporterResult.rows[0] || null,
-    reporter_id: void 0
+    ...rest,
+    reporter: reporterResult.rows[0] || null
   };
 };
 var createIssueIntoDB = async (payload) => {
@@ -263,8 +293,9 @@ var updateIssueInDB = async (id, payload) => {
        type        = COALESCE($3, type),
        status      = COALESCE($4, status),
        updated_at  = NOW()
-     WHERE id = $5 RETURNING * `,
-    [title, description, type, status, id]
+     WHERE id = $5
+     RETURNING *`,
+    [title ?? null, description ?? null, type ?? null, status ?? null, id]
   );
   return result.rows[0] || null;
 };
@@ -288,12 +319,7 @@ var getAllIssues = async (req, res, next) => {
   try {
     const { sort, type, status } = req.query;
     const data = await issueService.getAllIssuesFromDB({ sort, type, status });
-    sendResponse_default(res, {
-      statusCode: 200,
-      success: true,
-      message: "Issues retrieved successfully",
-      data
-    });
+    sendResponse_default(res, { statusCode: 200, success: true, message: "Issues retrieved successfully", data });
   } catch (error) {
     next(error);
   }
@@ -313,17 +339,30 @@ var getSingleIssue = async (req, res, next) => {
 };
 var createIssue = async (req, res, next) => {
   try {
+    const { title, description, type } = req.body;
+    if (!title || !description || !type) {
+      sendResponse_default(res, {
+        statusCode: 400,
+        success: false,
+        message: "title, description, and type are required"
+      });
+      return;
+    }
+    if (title.length > 150) {
+      sendResponse_default(res, { statusCode: 400, success: false, message: "title must be 150 characters or fewer" });
+      return;
+    }
+    if (description.length < 20) {
+      sendResponse_default(res, { statusCode: 400, success: false, message: "description must be at least 20 characters" });
+      return;
+    }
+    if (!["bug", "feature_request"].includes(type)) {
+      sendResponse_default(res, { statusCode: 400, success: false, message: "type must be bug or feature_request" });
+      return;
+    }
     const reporter_id = req.user.id;
-    const data = await issueService.createIssueIntoDB({
-      ...req.body,
-      reporter_id
-    });
-    sendResponse_default(res, {
-      statusCode: 201,
-      success: true,
-      message: "Issue created successfully",
-      data
-    });
+    const data = await issueService.createIssueIntoDB({ title, description, type, reporter_id });
+    sendResponse_default(res, { statusCode: 201, success: true, message: "Issue created successfully", data });
   } catch (error) {
     next(error);
   }
@@ -331,14 +370,14 @@ var createIssue = async (req, res, next) => {
 var updateIssue = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const requestingUser = req.user || { id: 1, role: "admin" };
+    const requestingUser = req.user;
     const existing = await issueService.getSingleIssueFromDB(id);
     if (!existing) {
       sendResponse_default(res, { statusCode: 404, success: false, message: "Issue not found" });
       return;
     }
     if (requestingUser.role === "contributor") {
-      if (existing.reporter.id !== requestingUser.id) {
+      if (existing.reporter?.id !== requestingUser.id) {
         sendResponse_default(res, { statusCode: 403, success: false, message: "Forbidden \u2014 you can only edit your own issues" });
         return;
       }
@@ -347,13 +386,13 @@ var updateIssue = async (req, res, next) => {
         return;
       }
     }
-    const data = await issueService.updateIssueInDB(id, req.body);
-    sendResponse_default(res, {
-      statusCode: 200,
-      success: true,
-      message: "Issue updated successfully",
-      data
-    });
+    const { title, description, type, status } = req.body;
+    const updatePayload = { title, description, type };
+    if (requestingUser.role === "maintainer") {
+      updatePayload.status = status;
+    }
+    const data = await issueService.updateIssueInDB(id, updatePayload);
+    sendResponse_default(res, { statusCode: 200, success: true, message: "Issue updated successfully", data });
   } catch (error) {
     next(error);
   }
@@ -414,9 +453,67 @@ var router2 = Router2();
 router2.get("/", issueController.getAllIssues);
 router2.get("/:id", issueController.getSingleIssue);
 router2.post("/", auth_default(USER_ROLE.contributor, USER_ROLE.maintainer), issueController.createIssue);
-router2.put("/:id", auth_default(USER_ROLE.contributor, USER_ROLE.maintainer), issueController.updateIssue);
+router2.patch("/:id", auth_default(USER_ROLE.contributor, USER_ROLE.maintainer), issueController.updateIssue);
 router2.delete("/:id", auth_default(USER_ROLE.maintainer), issueController.deleteIssue);
 var issueRoute = router2;
+
+// src/module/metrics/metrics.route.ts
+import { Router as Router3 } from "express";
+
+// src/module/metrics/metrics.service.ts
+var getSystemMetrics = async () => {
+  const [totalIssues, issuesByStatus, issuesByType, totalUsers, usersByRole] = await Promise.all([
+    pool.query(
+      `SELECT COUNT(*) AS count FROM issues`
+    ),
+    pool.query(
+      `SELECT status, COUNT(*) AS count FROM issues GROUP BY status`
+    ),
+    pool.query(
+      `SELECT type, COUNT(*) AS count FROM issues GROUP BY type`
+    ),
+    pool.query(
+      `SELECT COUNT(*) AS count FROM users`
+    ),
+    pool.query(
+      `SELECT role, COUNT(*) AS count FROM users GROUP BY role`
+    )
+  ]);
+  return {
+    issues: {
+      total: Number(totalIssues.rows[0].count),
+      by_status: Object.fromEntries(
+        issuesByStatus.rows.map((r) => [r.status, Number(r.count)])
+      ),
+      by_type: Object.fromEntries(
+        issuesByType.rows.map((r) => [r.type, Number(r.count)])
+      )
+    },
+    users: {
+      total: Number(totalUsers.rows[0].count),
+      by_role: Object.fromEntries(
+        usersByRole.rows.map((r) => [r.role, Number(r.count)])
+      )
+    }
+  };
+};
+var metricsService = { getSystemMetrics };
+
+// src/module/metrics/metrics.controller.ts
+var getMetrics = async (_req, res, next) => {
+  try {
+    const data = await metricsService.getSystemMetrics();
+    sendResponse_default(res, { statusCode: 200, success: true, message: "Metrics retrieved successfully", data });
+  } catch (error) {
+    next(error);
+  }
+};
+var metricsController = { getMetrics };
+
+// src/module/metrics/metrics.route.ts
+var router3 = Router3();
+router3.get("/", auth_default(USER_ROLE.maintainer), metricsController.getMetrics);
+var metricsRoute = router3;
 
 // src/app.ts
 var app = express();
@@ -424,12 +521,13 @@ app.use(CookieParser());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(logger_default);
-app.use(cors({ origin: "http://localhost:3000" }));
+app.use(cors({ origin: process.env.CORS_ORIGIN || "http://localhost:3000" }));
 app.get("/", (req, res) => {
   res.status(200).json({ message: "DevPulse API is running" });
 });
 app.use("/api/auth", authRoute);
 app.use("/api/issues", issueRoute);
+app.use("/api/metrics", metricsRoute);
 app.use(globalErrorHandler_default);
 var app_default = app;
 
