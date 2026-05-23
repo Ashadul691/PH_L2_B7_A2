@@ -1,9 +1,9 @@
-import type { Request, Response } from "express";
+import type { NextFunction, Request, Response } from "express";
 import sendResponse from "../../utility/sendResponse";
 import { registerUserIntoDB, loginUserIntoDB } from "./auth.service";
 import type { IRegister, ILogin } from "./auth.interface";
 
-const registerUser = async (req: Request, res: Response) => {
+const registerUser = async (req: Request, res: Response, next: NextFunction) =>  {
   try {
     const data = req.body as IRegister;
     
@@ -13,12 +13,12 @@ const registerUser = async (req: Request, res: Response) => {
     if (error.message.includes("duplicate key")) {
       sendResponse(res, { statusCode: 400, success: false, message: "Email already registered" });
     } else {
-      sendResponse(res, { statusCode: 401, success: false, message: error.message });
+      next(error); 
     }
   }
 };
 
-const loginUser = async (req: Request, res: Response) => {
+const loginUser = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const data = req.body as ILogin;
     const result = await loginUserIntoDB(data);
