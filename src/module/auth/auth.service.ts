@@ -4,6 +4,7 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { pool } from "../../db";
 import config from "../../config";
+import { generateToken } from "../../utility/generateToken";
 
 const registerUserIntoDB =async (payload:IRegister)=>{
 const{name,email,password,role}=payload ;
@@ -42,14 +43,10 @@ const loginUserIntoDB = async (payload: ILogin) => {
     name: user.name,
     role: user.role, };
 
-  const token = jwt.sign(
-    jwtPayload,
-    config.secret,
-    { expiresIn: "1d" },
-  );
+  const token = generateToken({ id: user.id, name: user.name, role: user.role });
 
   const { password: _removed, ...safeUser } = user;
   return { token, user: safeUser };
 };
 
-export const authService = { registerUserIntoDB, loginUserIntoDB };
+export { registerUserIntoDB, loginUserIntoDB };

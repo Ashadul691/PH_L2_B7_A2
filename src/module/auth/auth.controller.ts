@@ -1,34 +1,34 @@
 import type { Request, Response } from "express";
-import { authService } from "./auth.service";
+import sendResponse from "../../utility/sendResponse";
+import { registerUserIntoDB, loginUserIntoDB } from "./auth.service";
+import type { IRegister, ILogin } from "./auth.interface";
 
 const registerUser = async (req: Request, res: Response) => {
   try {
-    const data = await authService.registerUserIntoDB(req.body);
-    res.status(201).json({
-      success: true,
-      message: "User registered successfully",
-      data,
-    });
+    const data = req.body as IRegister;
+    
+    const result = await registerUserIntoDB(data);
+    sendResponse(res, { statusCode: 201, success: true, message: "User registered successfully", data: result });
   } catch (error: any) {
-    if (error.code === "23505") {
-      res.status(400).json({ success: false, message: "Email already registered" });
-      return;
+    if (error.message.includes("duplicate key")) {
+      sendResponse(res, { statusCode: 400, success: false, message: "Email already registered" });
+    } else {
+      sendResponse(res, { statusCode: 401, success: false, message: error.message });
     }
-    res.status(500).json({ success: false, message: error.message });
   }
 };
 
 const loginUser = async (req: Request, res: Response) => {
   try {
-    const result = await authService.loginUserIntoDB(req.body);
-    res.status(200).json({
-      success: true,
-      message: "Login successful",
-      data: result,
-    });
+    const data = req.body as ILogin;
+    const result = await loginUserIntoDB(data);
+    sendResponse(res, { statusCode: 200, success: true, message: "Login successful", data: result });
   } catch (error: any) {
-    res.status(401).json({ success: false, message: error.message });
+    sendResponse(res, { statusCode: 401, success: false, message: error.message });
   }
 };
 
-export const authController = { registerUser, loginUser };
+export const authController = {
+  registerUser,
+  loginUser,
+};
