@@ -47,8 +47,9 @@ const getSingleIssue = async (req: Request, res: Response, next: NextFunction) =
 
 const createIssue = async (req: Request, res: Response, next: NextFunction) => {
   try {
-   // const reporter_id = (req.user as any).id;
-    const reporter_id = 1;
+    const reporter_id = (req.user as any).id;
+    // const reporter_id = 1;
+
     const data = await issueService.createIssueIntoDB({
       ...req.body,
       reporter_id,
