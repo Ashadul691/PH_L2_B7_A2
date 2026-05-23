@@ -1,5 +1,5 @@
 import { pool } from "../../db";
-import type { IIssue } from "./issue.interface";
+import type { IIssue, IIssueUpdate } from "./issue.interface";
 import type { IssueStatus, IssueType } from "../../types";
 
 const getAllIssuesFromDB = async (filters: {
@@ -10,14 +10,15 @@ const getAllIssuesFromDB = async (filters: {
   const { sort, type, status } = filters;
 
   const conditions: string[] = [];
-  const values: any[]        = [];
-  let   param                 = 1;
+  const values: unknown[]    = [];
+  let   param                = 1;
 
   if (type)   { conditions.push(`type = $${param++}`);   values.push(type);   }
   if (status) { conditions.push(`status = $${param++}`); values.push(status); }
 
   const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
   const order = sort === "oldest" ? "ASC" : "DESC";
+
   const issuesResult = await pool.query(
     `SELECT id, title, description, type, status, reporter_id, created_at, updated_at
      FROM issues
@@ -28,47 +29,48 @@ const getAllIssuesFromDB = async (filters: {
 
   const issues = issuesResult.rows;
   if (issues.length === 0) return [];
-  const reporterIds = [...new Set(issues.map((i) => i.reporter_id))];
+
+  const reporterIds = [...new Set(issues.map((i) => i.reporter_id as number))];
 
   const reportersResult = await pool.query(
     `SELECT id, name, role FROM users WHERE id = ANY($1::int[])`,
     [reporterIds],
   );
 
-  const reporterMap: Record<number, any> = {};
+  const reporterMap: Record<number, { id: number; name: string; role: string }> = {};
   for (const r of reportersResult.rows) {
-    reporterMap[r.id] = { id: r.id, name: r.name, role: r.role };
+    reporterMap[r.id as number] = { id: r.id, name: r.name, role: r.role };
   }
-  return issues.map((issue) => ({
-    ...issue,
-    reporter: reporterMap[issue.reporter_id] || null,
-    reporter_id: undefined, 
+
+  return issues.map(({ reporter_id, ...rest }) => ({
+    ...rest,
+    reporter: reporterMap[reporter_id as number] || null,
   }));
 };
 
 const getSingleIssueFromDB = async (id: string) => {
-  
   const issueResult = await pool.query(
     `SELECT id, title, description, type, status, reporter_id, created_at, updated_at
-     FROM issues
-     WHERE id = $1`,
+     FROM issues WHERE id = $1`,
     [id],
   );
 
   if (!issueResult.rows[0]) return null;
 
-  const issue = issueResult.rows[0];
+  const { reporter_id, ...rest } = issueResult.rows[0];
+
   const reporterResult = await pool.query(
     `SELECT id, name, role FROM users WHERE id = $1`,
-    [issue.reporter_id],
+    [reporter_id],
   );
 
+  
   return {
-    ...issue,
+    ...rest,
     reporter: reporterResult.rows[0] || null,
-    reporter_id: undefined,
   };
 };
+
 const createIssueIntoDB = async (payload: IIssue) => {
   const { title, description, type, reporter_id } = payload;
 
@@ -82,10 +84,7 @@ const createIssueIntoDB = async (payload: IIssue) => {
   return result.rows[0];
 };
 
-const updateIssueInDB = async (
-  id: string,
-  payload: Partial<IIssue & { status: IssueStatus }>,
-) => {
+const updateIssueInDB = async (id: string, payload: IIssueUpdate) => {
   const { title, description, type, status } = payload;
 
   const result = await pool.query(
@@ -96,8 +95,9 @@ const updateIssueInDB = async (
        type        = COALESCE($3, type),
        status      = COALESCE($4, status),
        updated_at  = NOW()
-     WHERE id = $5 RETURNING * `,
-    [title, description, type, status, id],
+     WHERE id = $5
+     RETURNING *`,
+    [title ?? null, description ?? null, type ?? null, status ?? null, id],
   );
 
   return result.rows[0] || null;

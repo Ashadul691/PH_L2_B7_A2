@@ -9,7 +9,8 @@ import { generateToken } from "../../utility/generateToken";
 const registerUserIntoDB =async (payload:IRegister)=>{
 const{name,email,password,role}=payload ;
 
-const hashPassword =await bcrypt.hash(password,10);
+const hashPassword = await bcrypt.hash(password, config.bcrypt_rounds);
+
 const result = await pool.query(
     `INSERT INTO users (name, email, password, role)
      VALUES ($1, $2, $3, COALESCE($4, 'contributor'))
@@ -38,10 +39,6 @@ const loginUserIntoDB = async (payload: ILogin) => {
     throw new Error("Invalid credentials!"); 
   }
 
-  const jwtPayload = {
-    id:   user.id,
-    name: user.name,
-    role: user.role, };
 
   const token = generateToken({ id: user.id, name: user.name, role: user.role });
 

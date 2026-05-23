@@ -1,5 +1,7 @@
 import type { NextFunction, Request, Response } from "express";
+import type { JwtPayload } from "jsonwebtoken";
 import type { IssueStatus, IssueType } from "../../types";
+import type { IIssueUpdate } from "./issue.interface";
 import sendResponse from "../../utility/sendResponse";
 import { issueService } from "./issue.service";
 
@@ -12,19 +14,11 @@ const getAllIssues = async (req: Request, res: Response, next: NextFunction) => 
     };
 
     const data = await issueService.getAllIssuesFromDB({ sort, type, status });
-
-    sendResponse(res, {
-      statusCode: 200,
-      success:    true,
-      message:    "Issues retrieved successfully",
-      data,
-    });
+    sendResponse(res, { statusCode: 200, success: true, message: "Issues retrieved successfully", data });
   } catch (error) {
     next(error);
   }
 };
-
-
 
 const getSingleIssue = async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -41,26 +35,40 @@ const getSingleIssue = async (req: Request, res: Response, next: NextFunction) =
   }
 };
 
-
-
-
-
 const createIssue = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const reporter_id = (req.user as any).id;
-    // const reporter_id = 1;
+    const { title, description, type } = req.body as {
+      title:       string;
+      description: string;
+      type:        IssueType;
+    };
 
-    const data = await issueService.createIssueIntoDB({
-      ...req.body,
-      reporter_id,
-    });
+  
+    if (!title || !description || !type) {
+      sendResponse(res, {
+        statusCode: 400,
+        success:    false,
+        message:    "title, description, and type are required",
+      });
+      return;
+    }
+    if (title.length > 150) {
+      sendResponse(res, { statusCode: 400, success: false, message: "title must be 150 characters or fewer" });
+      return;
+    }
+    if (description.length < 20) {
+      sendResponse(res, { statusCode: 400, success: false, message: "description must be at least 20 characters" });
+      return;
+    }
+    if (!["bug", "feature_request"].includes(type)) {
+      sendResponse(res, { statusCode: 400, success: false, message: "type must be bug or feature_request" });
+      return;
+    }
 
-    sendResponse(res, {
-      statusCode: 201,
-      success: true,
-      message: "Issue created successfully",
-      data,
-    });
+    const reporter_id = (req.user as JwtPayload).id as number;
+
+    const data = await issueService.createIssueIntoDB({ title, description, type, reporter_id });
+    sendResponse(res, { statusCode: 201, success: true, message: "Issue created successfully", data });
   } catch (error) {
     next(error);
   }
@@ -69,16 +77,16 @@ const createIssue = async (req: Request, res: Response, next: NextFunction) => {
 const updateIssue = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { id } = req.params;
-    const requestingUser = (req.user as any) || { id: 1, role: "admin" };
-
-    // issue exists or not
+    const requestingUser = req.user as JwtPayload;
     const existing = await issueService.getSingleIssueFromDB(id);
     if (!existing) {
       sendResponse(res, { statusCode: 404, success: false, message: "Issue not found" });
       return;
     }
+
+    // contributor restrictions
     if (requestingUser.role === "contributor") {
-      if (existing.reporter.id !== requestingUser.id) {
+      if ((existing.reporter as { id: number } | null)?.id !== requestingUser.id) {
         sendResponse(res, { statusCode: 403, success: false, message: "Forbidden — you can only edit your own issues" });
         return;
       }
@@ -87,15 +95,15 @@ const updateIssue = async (req: Request, res: Response, next: NextFunction) => {
         return;
       }
     }
+    const { title, description, type, status } = req.body as IIssueUpdate;
 
-    const data = await issueService.updateIssueInDB(id, req.body);
+    const updatePayload: IIssueUpdate = { title, description, type };
+    if (requestingUser.role === "maintainer") {
+      updatePayload.status = status;
+    }
 
-    sendResponse(res, {
-      statusCode: 200,
-      success:    true,
-      message:    "Issue updated successfully",
-      data,
-    });
+    const data = await issueService.updateIssueInDB(id, updatePayload);
+    sendResponse(res, { statusCode: 200, success: true, message: "Issue updated successfully", data });
   } catch (error) {
     next(error);
   }
@@ -110,7 +118,6 @@ const deleteIssue = async (req: Request, res: Response, next: NextFunction) => {
       sendResponse(res, { statusCode: 404, success: false, message: "Issue not found" });
       return;
     }
-
     sendResponse(res, { statusCode: 200, success: true, message: "Issue deleted successfully" });
   } catch (error) {
     next(error);

@@ -7,3 +7,10 @@ export interface IIssue {
   reporter_id?: number;  
   status?:      IssueStatus;
 }
+
+export interface IIssueUpdate {
+  title?:       string;
+  description?: string;
+  type?:        IssueType;
+  status?:      IssueStatus; 
+}
